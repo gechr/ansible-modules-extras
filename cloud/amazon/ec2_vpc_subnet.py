@@ -32,6 +32,11 @@ options:
       - "The CIDR block for the subnet. E.g. 10.0.0.0/16. Only required when state=present."
     required: false
     default: null
+  auto_assign_public_ip:
+    description:
+      - "Assign a public IP address to instances launched into the specified subnet."
+    required: false
+    default: no
   tags:
     description:
       - "A dict of tags to apply to the subnet. Any tags currently applied to the subnet and not present here will be removed."
@@ -75,7 +80,7 @@ EXAMPLES = '''
 '''
 
 import sys  # noqa
-import time
+import time  # noqa
 
 try:
     import boto.ec2
@@ -111,7 +116,7 @@ def get_subnet_info(subnet):
                     'available_ip_address_count': subnet.available_ip_address_count,
                     'cidr_block': subnet.cidr_block,
                     'default_for_az': subnet.defaultForAz,
-                    'map_public_ip_on_launch': subnet.mapPublicIpOnLaunch,
+                    'auto_assign_public_ip': subnet.mapPublicIpOnLaunch,
                     'state': subnet.state,
                     'tags': subnet.tags,
                     'vpc_id': subnet.vpc_id
@@ -154,6 +159,16 @@ def get_resource_tags(vpc_conn, resource_id):
                 vpc_conn.get_all_tags(filters={'resource-id': resource_id}))
 
 
+def set_auto_assign_public_ip(vpc_conn, subnet_id, auto_assign_public_ip, check_mode=False):
+    params = {
+        'SubnetId': subnet_id,
+        'Version': '2014-06-15',
+        'MapPublicIpOnLaunch.Value': 'true' if auto_assign_public_ip else 'false',
+        'DryRun': 'true' if check_mode else 'false'
+    }
+    return vpc_conn.get_status('ModifySubnetAttribute', params)
+
+
 def ensure_tags(vpc_conn, resource_id, tags, add_only, check_mode):
     try:
         cur_tags = get_resource_tags(vpc_conn, resource_id)
@@ -180,7 +195,7 @@ def get_matching_subnet(vpc_conn, vpc_id, cidr):
     return next((s for s in subnets if s.cidr_block == cidr), None)
 
 
-def ensure_subnet_present(vpc_conn, vpc_id, cidr, az, tags, check_mode):
+def ensure_subnet_present(vpc_conn, vpc_id, cidr, auto_assign_public_ip, az, tags, check_mode):
     subnet = get_matching_subnet(vpc_conn, vpc_id, cidr)
     changed = False
     if subnet is None:
@@ -192,6 +207,12 @@ def ensure_subnet_present(vpc_conn, vpc_id, cidr, az, tags, check_mode):
                 'changed': changed,
                 'subnet': {}
             }
+
+    auto_assign_public_ip_str = 'true' if auto_assign_public_ip else 'false'
+    if subnet.mapPublicIpOnLaunch != auto_assign_public_ip_str:
+        set_auto_assign_public_ip(vpc_conn, subnet.id, auto_assign_public_ip, check_mode)
+        subnet.mapPublicIpOnLaunch = auto_assign_public_ip_str
+        changed = True
 
     if tags != subnet.tags:
         ensure_tags(vpc_conn, subnet.id, tags, False, check_mode)
@@ -226,6 +247,7 @@ def main():
         dict(
             az = dict(default=None, required=False),
             cidr = dict(default=None, required=True),
+            auto_assign_public_ip = dict(default='no', type='bool'),
             state = dict(default='present', choices=['present', 'absent']),
             tags = dict(default=None, required=False, type='dict', aliases=['resource_tags']),
             vpc_id = dict(default=None, required=True)
@@ -250,12 +272,13 @@ def main():
     vpc_id = module.params.get('vpc_id')
     tags = module.params.get('tags')
     cidr = module.params.get('cidr')
+    auto_assign_public_ip = module.params.get('auto_assign_public_ip')
     az = module.params.get('az')
     state = module.params.get('state')
 
     try:
         if state == 'present':
-            result = ensure_subnet_present(connection, vpc_id, cidr, az, tags,
+            result = ensure_subnet_present(connection, vpc_id, cidr, auto_assign_public_ip, az, tags,
                                            check_mode=module.check_mode)
         elif state == 'absent':
             result = ensure_subnet_absent(connection, vpc_id, cidr,
