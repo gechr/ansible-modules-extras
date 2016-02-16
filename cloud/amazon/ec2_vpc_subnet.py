@@ -37,6 +37,7 @@ options:
       - "Assign a public IP address to instances launched into the specified subnet."
     required: false
     default: no
+    version_added: "2.1"
   tags:
     description:
       - "A dict of tags to apply to the subnet. Any tags currently applied to the subnet and not present here will be removed."
